@@ -8,17 +8,20 @@ from smogonreader import SmogonReader
 from utils import memoized
 import sqlite3
 import itertools
+import optparse
 
 class Type(object):
-    def __init__(self, newType, se, resist, immune, value):
+    def __init__(self, newType, se, neutral, resist, immune, value):
         self.myTypes = newType
         self.se = se
+        self.neutral = neutral
         self.resist = resist
         self.immune = immune
         self.value = value
         
     def toString(self):
-        newString = str(self.myTypes) + " " + str(len(self.se)) + " " + str(len(self.resist)) + " " + str(len(self.immune)) + " " + str(self.value)
+        printableTypes = [str(types[1]) for types in self.myTypes]
+        newString = str(printableTypes) + " " + str(len(self.se)) + " " + str(len(self.resist)) + " " + str(len(self.immune)) + " " + str(self.value)
         return newString
 
 class TypeCombination():
@@ -36,18 +39,33 @@ class TypeCombination():
         return newString
 
 class TypeCalculator(object):
-    def __init__(self):
+    def __init__(self, types, requiredTypes, pokemon):
         conn = sqlite3.connect('veekun-pokedex.sqlite')
         self.c = conn.cursor()
+        self.typeCount = types
+        self.requiredTypes = []
         
-    def generate(self):
         self.all_pokemon = self._queryPokemon()
         self.all_types = self._queryTypes()
         self.pokemon_abilities = self._queryAbilities()
-        self.type_effectiveness = {}
         self.pokemonUsage = dict([(self._hackPokemonNames(individualPokemon[1]), float(individualPokemon[2].strip('%'))/100) for individualPokemon in SmogonReader("smogon.txt").parse()])
+        
+        self.requiredPokemon = []
+        for testMon in pokemon.split(','):
+            if testMon != '':
+                testName = self._hackPokemonNames(testMon)
+                if (self._checkUsage(testName) != 0):
+                    self.requiredPokemon.append(testName)
+        for typeName in requiredTypes.split(','):
+            if typeName != '':
+                self.requiredTypes.append(self._lookupType(typeName))
+        
+    def generate(self):
+        self.type_effectiveness = {}
         # TODO: Remove
         self.unseen = []
+        
+        print "Generating %d types which are super-effective against %s and includes the types %s." % (self.typeCount, self.requiredPokemon, self.requiredTypes)
         
         # Generate all Pokemon weaknesses.
         for pokemon in self.all_pokemon:
@@ -68,12 +86,15 @@ class TypeCalculator(object):
         
         # Look up all type combinations.
         attacking_combinations = []
-        possible_combinations = itertools.combinations(self.all_types, 4)
+        possible_combinations = itertools.combinations(self.all_types, self.typeCount)
 
         for cur_types in possible_combinations:
+            if not set(self.requiredTypes).issubset(set(list(cur_types))):
+                continue
             se = []
             resist = []
             immune = []
+            neutral = []
             value = 0
             #if ((11, 'Water') not in cur_types or (15, 'Ice') not in cur_types):
             #    continue
@@ -84,11 +105,15 @@ class TypeCalculator(object):
                     value = value + 1 * self._checkUsage(pokemon)
                 elif (damage == 0):
                     immune.append(pokemon)
-                    value = value - 0 * self._checkUsage(pokemon)
+                    value = value - 2 * self._checkUsage(pokemon)
                 elif (damage < 1):
                     resist.append(pokemon)
-                    value = value - 0 * self._checkUsage(pokemon)
-            attacking_combinations.append(Type(cur_types, se, resist, immune, value))
+                    value = value - 1 * self._checkUsage(pokemon)
+                else:
+                    neutral.append(pokemon)
+            if not set(self.requiredPokemon).issubset(set(se)):
+                continue
+            attacking_combinations.append(Type(cur_types, se, neutral, resist, immune, value))
         
         attacking_combinations = sorted(attacking_combinations, key=lambda attack : attack.value, reverse=True)
         
@@ -122,6 +147,12 @@ class TypeCalculator(object):
             for ability in abilities:
                 pokemon_abilities[pokemon[1]].append((self.c.execute("SELECT identifier FROM abilities WHERE id = " + str(ability[0]) + ";").fetchall()[0])[0]);
         return pokemon_abilities
+    
+    def _lookupType(self, typeName):
+        for curType in self.all_types:
+            if curType[1].lower() == typeName.lower():
+                return curType
+        return None
     
     def _hackPokemonNames(self, name):
         replacements = {};
@@ -179,12 +210,29 @@ class TypeCalculator(object):
     
 
 if __name__ == "__main__":
-    test = TypeCalculator()
+    parser = optparse.OptionParser(
+        description='Runs a program to calculate an optimal attack type selection.',
+        usage='usage: %prog [option]...')
+    parser.add_option('-n', '--types', default='2',
+        help='The number of types to calculate (typically 2, 3 or 4)')
+    parser.add_option('-r', '--required', default="",
+        help='A comma separated list of required types in the attack (i.e. "water,fire,rock"'
+             'It is an error to have more required types listed than types to calculate.')
+    parser.add_option('-p', '--pokemon', default="",
+        help='A comma separated list of Pokemon that the attack combination MUST be super-effective against.')
+    
+    (opts, argv) = parser.parse_args()
+    
+    test = TypeCalculator(int(opts.types), opts.required, opts.pokemon)
     l = test.generate()
-    for x in range(20):
+    for x in range(min(20, len(l))):
         print l[x].toString()
         adjustedList = [item for item in l[x].resist if test._checkUsage(item) != 0 or "mega" in item]
-        print "    " + ", ".join(sorted(adjustedList, key=lambda name : test._checkUsage(name), reverse=True))
+        adjustedNeutral = [item for item in l[x].neutral if test._checkUsage(item) != 0 or "mega" in item]
+        adjustedSEList = [item for item in l[x].se if test._checkUsage(item) != 0 or "mega" in item]
+        print "    Top Threats SE: " + ", ".join(sorted(adjustedSEList, key=lambda name : test._checkUsage(name), reverse=True)[:10])
+        print "    Top Threats Neutral: " + ", ".join(sorted(adjustedNeutral, key=lambda name : test._checkUsage(name), reverse=True)[:10])
+        print "    Top Threats Resist " + ", ".join(sorted(adjustedList, key=lambda name : test._checkUsage(name), reverse=True))
         
-    unseen = [name for name in set(test.unseen) if "mega" not in name]
-    print unseen
+    #unseen = [name for name in set(test.unseen) if "mega" not in name]
+    #print unseen
