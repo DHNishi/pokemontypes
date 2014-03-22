@@ -5,9 +5,21 @@ Created on Feb 21, 2014
 '''
 
 from smogonreader import SmogonReader
-import sqlite3;
+from utils import memoized
+import sqlite3
+import itertools
 
-
+class Type(object):
+    def __init__(self, newType, se, resist, immune, value):
+        self.myTypes = newType
+        self.se = se
+        self.resist = resist
+        self.immune = immune
+        self.value = value
+        
+    def toString(self):
+        newString = str(self.myTypes) + " " + str(len(self.se)) + " " + str(len(self.resist)) + " " + str(len(self.immune)) + " " + str(self.value)
+        return newString
 
 class TypeCombination():
     def __init__(self, firstType, secondType, se, resist, immune):
@@ -52,40 +64,38 @@ class TypeCalculator(object):
                         types[curtype[1]] = types[curtype[1]] * actual_damage.fetchone()[0]
                 self.type_effectiveness[pokemon_name] = types
                 
+        print "Set up complete"        
+        
         # Look up all type combinations.
         attacking_combinations = []
-        for cur_type in self.all_types:
-            type_name_1 = cur_type[1]
-            for second_type in self.all_types:
-                type_name_2 = second_type[1]
-                if type_name_1 != type_name_2:
-                    curCombo = TypeCombination(type_name_1, type_name_2, 0, 0, 0)
-                    # Filter reduced duplicates.
-                    if (len([exists for exists in attacking_combinations if exists.secondType == type_name_1 and exists.firstType == type_name_2]) == 0): 
-                        # Iterate over every Pokemon
-                        for pokemon in self.type_effectiveness:
-                            if self._checkUsage(pokemon) != 0 or "mega" in pokemon:
-                                damage = self.getDamage(type_name_1, pokemon)
-                                damage_2 = self.getDamage(type_name_2, pokemon)
-                                maxDamage = max(damage, damage_2)
-                                if (maxDamage > 1):
-                                    curCombo.se = curCombo.se + 1
-                                    curCombo.value = curCombo.value + 1 * self._checkUsage(pokemon)
-                                elif (maxDamage == 0):
-                                    curCombo.immune = curCombo.immune + 1
-                                    curCombo.resistList.append(pokemon)
-                                    curCombo.value = curCombo.value - 2 * self._checkUsage(pokemon)
-                                elif (maxDamage < 1):
-                                    curCombo.resist = curCombo.resist + 1
-                                    curCombo.resistList.append(pokemon)
-                                    curCombo.value = curCombo.value - 1 * self._checkUsage(pokemon)
-                            
-                        attacking_combinations.append(curCombo)
-                    
-        attacking_combinations = sorted(attacking_combinations, key=lambda attack : attack.value, reverse=True)
+        possible_combinations = itertools.combinations(self.all_types, 4)
 
+        for cur_types in possible_combinations:
+            se = []
+            resist = []
+            immune = []
+            value = 0
+            #if ((11, 'Water') not in cur_types or (15, 'Ice') not in cur_types):
+            #    continue
+            for pokemon in self.type_effectiveness:
+                damage = max([self.getDamage(cur_type[1], pokemon) for cur_type in cur_types])
+                if (damage > 1):
+                    se.append(pokemon)
+                    value = value + 1 * self._checkUsage(pokemon)
+                elif (damage == 0):
+                    immune.append(pokemon)
+                    value = value - 0 * self._checkUsage(pokemon)
+                elif (damage < 1):
+                    resist.append(pokemon)
+                    value = value - 0 * self._checkUsage(pokemon)
+            attacking_combinations.append(Type(cur_types, se, resist, immune, value))
+        
+        attacking_combinations = sorted(attacking_combinations, key=lambda attack : attack.value, reverse=True)
+        
+        print self.all_types
         return attacking_combinations
 
+    @memoized
     def _checkUsage(self, pokemon):
         if (self.pokemonUsage.has_key(pokemon)):
             return self.pokemonUsage[pokemon]
@@ -139,7 +149,8 @@ class TypeCalculator(object):
             return replacements[name]
         
         return name
-
+    
+    @memoized
     def getDamage(self, attackType, pokemon):
         abilities = self.pokemon_abilities[pokemon]
         damage = self.type_effectiveness[pokemon][attackType]
@@ -172,7 +183,7 @@ if __name__ == "__main__":
     l = test.generate()
     for x in range(20):
         print l[x].toString()
-        adjustedList = [item for item in l[x].resistList if test._checkUsage(item) != 0 or "mega" in item]
+        adjustedList = [item for item in l[x].resist if test._checkUsage(item) != 0 or "mega" in item]
         print "    " + ", ".join(sorted(adjustedList, key=lambda name : test._checkUsage(name), reverse=True))
         
     unseen = [name for name in set(test.unseen) if "mega" not in name]
