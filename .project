@@ -14,11 +14,4 @@
 	<natures>
 		<nature>org.python.pydev.pythonNature</nature>
 	</natures>
-	<linkedResources>
-		<link>
-			<name>PokemonTypes</name>
-			<type>2</type>
-			<location>/home/daniel/Dropbox/Personal Projects/PokemonTypes</location>
-		</link>
-	</linkedResources>
 </projectDescription>
